@@ -44,6 +44,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
+            word-wrap: break-word;
         }
         
         #status.error {
@@ -149,8 +150,8 @@
         let isDetecting = false;
         let frameCount = 0;
         const FRAME_SKIP = 2;
-        let inputName = 'images';  // ✅ Nombre correcto del input
-        let outputName = 'output0'; // ✅ Nombre correcto del output
+        let inputName = null;
+        let outputName = null;
         
         function updateStatus(message, type = 'loading') {
             statusDiv.textContent = message;
@@ -200,7 +201,7 @@
         }
         
         // ============================================
-        // CARGA DEL MODELO
+        // CARGA DEL MODELO - VERSIÓN CORREGIDA
         // ============================================
         
         async function loadModel() {
@@ -211,7 +212,6 @@
                     throw new Error('ONNX Runtime no está disponible');
                 }
                 
-                // Configurar WASM
                 ort.env.wasm.numThreads = 1;
                 ort.env.wasm.simd = true;
                 ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/';
@@ -226,16 +226,28 @@
                 // ✅ Cargar modelo
                 session = await ort.InferenceSession.create(MODEL_PATH, options);
                 
-                // ✅ Obtener nombres de input/output correctos
-                inputName = session.inputNames[0] || 'images';
-                outputName = session.outputNames[0] || 'output0';
+                // ✅ OBTENER NOMBRES DE INPUT Y OUTPUT AUTOMÁTICAMENTE
+                inputName = session.inputNames[0];
+                outputName = session.outputNames[0];
                 
-                console.log('✅ Input name:', inputName);
-                console.log('✅ Output name:', outputName);
-                console.log('📊 Input dims:', session.inputMetadata[inputName]?.dims);
-                console.log('📊 Output dims:', session.outputMetadata[outputName]?.dims);
+                console.log('🔍 Nombres del modelo:');
+                console.log('  Inputs:', session.inputNames);
+                console.log('  Outputs:', session.outputNames);
+                console.log('  Input name:', inputName);
+                console.log('  Output name:', outputName);
                 
-                updateStatus('✅ ¡Modelo cargado! Enfoca componentes.', 'loading');
+                // ✅ Verificar metadatos
+                if (session.inputMetadata && session.inputMetadata[inputName]) {
+                    const meta = session.inputMetadata[inputName];
+                    console.log(`  Input dims: [${meta.dims.join(', ')}]`);
+                }
+                
+                if (session.outputMetadata && session.outputMetadata[outputName]) {
+                    const meta = session.outputMetadata[outputName];
+                    console.log(`  Output dims: [${meta.dims.join(', ')}]`);
+                }
+                
+                updateStatus(`✅ Modelo cargado (${outputName})`, 'loading');
                 isDetecting = true;
                 startDetection();
                 
@@ -274,7 +286,16 @@
         }
         
         async function processFrame() {
-            if (!session) return;
+            // ✅ Verificar que la sesión y los nombres existan
+            if (!session) {
+                console.warn('Session no disponible');
+                return;
+            }
+            
+            if (!inputName || !outputName) {
+                console.warn('Nombres de input/output no definidos');
+                return;
+            }
             
             try {
                 // Crear canvas temporal
@@ -305,33 +326,50 @@
                 // Crear tensor
                 const inputTensor = new ort.Tensor('float32', float32Array, [1, 3, INPUT_SIZE, INPUT_SIZE]);
                 
-                // ✅ Usar el nombre correcto del input
-                const feeds = { [inputName]: inputTensor };
+                // ✅ Usar el nombre de input correcto
+                const feeds = {};
+                feeds[inputName] = inputTensor;
+                
+                // Ejecutar inferencia
                 const results = await session.run(feeds);
                 
-                // ✅ Usar el nombre correcto del output
+                // ✅ Usar el nombre de output correcto
                 const output = results[outputName];
                 
-                if (output) {
-                    drawPredictions(output.data, output.dims);
+                if (!output) {
+                    console.warn('No se encontró el output:', outputName);
+                    console.log('Outputs disponibles:', Object.keys(results));
+                    return;
                 }
                 
+                // ✅ Procesar la salida
+                drawPredictions(output.data, output.dims);
+                
             } catch (error) {
-                console.warn('Error en procesamiento:', error);
+                console.warn('Error en procesamiento:', error.message);
+                console.error(error);
             }
         }
         
         // ============================================
-        // DIBUJADO
+        // DIBUJADO - VERSIÓN CORREGIDA
         // ============================================
         
         function drawPredictions(data, dims) {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             
-            if (!data || !dims || dims.length < 2) return;
+            if (!data || !dims || dims.length < 3) {
+                return;
+            }
             
+            // ✅ Formato: [1, 300, 6]
             const numPredictions = dims[1] || 0;
             const predLength = dims[2] || 0;
+            
+            if (numPredictions === 0 || predLength === 0) {
+                return;
+            }
+            
             const scaleX = canvas.width / INPUT_SIZE;
             const scaleY = canvas.height / INPUT_SIZE;
             
@@ -340,42 +378,51 @@
             for (let i = 0; i < numPredictions; i++) {
                 const offset = i * predLength;
                 
-                // YOLO format: [cx, cy, w, h, ...class_probs]
-                const cx = data[offset] || 0;
-                const cy = data[offset + 1] || 0;
-                const w = data[offset + 2] || 0;
-                const h = data[offset + 3] || 0;
+                // ✅ Formato: [x1, y1, x2, y2, confidence, class_id]
+                const x1 = data[offset + 0] || 0;
+                const y1 = data[offset + 1] || 0;
+                const x2 = data[offset + 2] || 0;
+                const y2 = data[offset + 3] || 0;
+                const confidence = data[offset + 4] || 0;
+                const classId = Math.round(data[offset + 5] || 0);
                 
-                // Encontrar mejor clase
-                let maxConf = 0;
-                let classId = -1;
-                
-                for (let c = 4; c < predLength; c++) {
-                    const conf = data[offset + c] || 0;
-                    if (conf > maxConf) {
-                        maxConf = conf;
-                        classId = c - 4;
-                    }
+                // Validar coordenadas
+                if (x1 < 0 || x1 > INPUT_SIZE || x2 < 0 || x2 > INPUT_SIZE ||
+                    y1 < 0 || y1 > INPUT_SIZE || y2 < 0 || y2 > INPUT_SIZE) {
+                    continue;
                 }
                 
-                // Filtrar por confianza
-                if (maxConf > CONFIDENCE_THRESHOLD && classId >= 0 && classId < LABELS.length) {
-                    const x = (cx - w / 2) * scaleX;
-                    const y = (cy - h / 2) * scaleY;
-                    const width = w * scaleX;
-                    const height = h * scaleY;
-                    
-                    detections.push({
-                        x, y, width, height,
-                        label: LABELS[classId],
-                        confidence: maxConf,
-                        classId
-                    });
+                if (x2 <= x1 || y2 <= y1) {
+                    continue;
                 }
+                
+                if (confidence < CONFIDENCE_THRESHOLD) {
+                    continue;
+                }
+                
+                if (classId < 0 || classId >= LABELS.length) {
+                    continue;
+                }
+                
+                const x = x1 * scaleX;
+                const y = y1 * scaleY;
+                const width = (x2 - x1) * scaleX;
+                const height = (y2 - y1) * scaleY;
+                
+                detections.push({
+                    x, y, width, height,
+                    label: LABELS[classId],
+                    confidence: confidence,
+                    classId: classId
+                });
             }
             
-            // Ordenar por confianza
+            // Ordenar y limitar
             detections.sort((a, b) => b.confidence - a.confidence);
+            
+            if (detections.length > 10) {
+                detections = detections.slice(0, 10);
+            }
             
             // Dibujar
             for (const det of detections) {
@@ -410,6 +457,15 @@
                 ctx.fillText(text, x + padding, y - 8);
                 ctx.shadowBlur = 0;
             }
+            
+            // Contador
+            if (detections.length > 0) {
+                ctx.fillStyle = 'rgba(0,0,0,0.7)';
+                ctx.fillRect(10, 10, 160, 28);
+                ctx.fillStyle = '#00ff88';
+                ctx.font = "12px Arial";
+                ctx.fillText(`🔍 ${detections.length} detecciones`, 20, 30);
+            }
         }
         
         // ============================================
@@ -418,7 +474,6 @@
         
         window.addEventListener('load', async () => {
             try {
-                // Verificar ONNX Runtime
                 if (typeof ort === 'undefined') {
                     throw new Error('ONNX Runtime no se cargó correctamente.');
                 }
@@ -426,20 +481,17 @@
                 console.log('🚗 Detector de Mecánica YOLO26s');
                 console.log(`📊 Clases: ${LABELS.length}`);
                 console.log(`📁 Modelo: ${MODEL_PATH}`);
+                console.log(`🔧 ONNX Runtime:`, ort.version || 'desconocida');
                 
-                // Iniciar cámara
                 await setupCamera();
-                
-                // Cargar modelo
                 await loadModel();
                 
             } catch (error) {
-                updateStatus(`❌ Error fatal: ${error.message}`, 'error');
-                console.error('Error en inicialización:', error);
+                console.error('❌ Error fatal:', error);
+                updateStatus(`❌ Error: ${error.message}`, 'error');
             }
         });
         
-        // Limpiar recursos
         window.addEventListener('beforeunload', () => {
             isDetecting = false;
             if (video.srcObject) {
