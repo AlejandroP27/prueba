@@ -5,7 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Detector de Mecánica YOLO26s</title>
     <!-- Cargamos ONNX Runtime Web desde CDN -->
-    <script src="https://jsdelivr.net"></script>
+    <!-- <script src="https://jsdelivr.net"></script> -->
+    <script src="https://cloudflare.com"></script>
+
     <style>
         body {
             margin: 0;
@@ -228,7 +230,19 @@
             await loadModel();
         }
         
-        window.onload = main;
+        //window.onload = main;
+        // Esperamos a que la página y todas las librerías externas estén 100% cargadas
+window.addEventListener('load', () => {
+    // Le damos un margen de 500ms al celular para registrar la librería 'ort'
+    setTimeout(() => {
+        if (typeof ort !== 'undefined') {
+            main();
+        } else {
+            document.getElementById('status').innerText = "Error: La librería ONNX no se cargó correctamente. Intenta refrescar la página.";
+        }
+    }, 500);
+});
+
     </script>
 </body>
 </html>
