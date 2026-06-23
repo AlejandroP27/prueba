@@ -2,247 +2,471 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Detector de Mecánica YOLO26s</title>
-    <!-- Cargamos ONNX Runtime Web desde CDN -->
-    <!-- <script src="https://jsdelivr.net"></script> -->
-    <script src="https://cloudflare.com"></script>
-
+    
+    <!-- ✅ CORRECCIÓN: CDN OFICIAL DE ONNX RUNTIME -->
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
+    
     <style>
-        body {
+        * {
             margin: 0;
-            font-family: Arial, sans-serif;
-            background-color: #111;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background-color: #0a0a0a;
             color: white;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            height: 100vh;
+            min-height: 100vh;
             overflow: hidden;
         }
+        
+        #status {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 100;
+            padding: 12px 20px;
+            font-size: 14px;
+            text-align: center;
+            background: rgba(0, 0, 0, 0.85);
+            backdrop-filter: blur(10px);
+            border-bottom: 2px solid #333;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            color: #00ff88;
+            min-height: 50px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        #status.error {
+            color: #ff4444;
+        }
+        
+        #status.loading {
+            color: #ffaa00;
+        }
+        
         #container {
             position: relative;
             width: 100%;
             max-width: 640px;
-            aspect-ratio: 1/1; /* YOLO26 trabaja mejor en formato cuadrado 640x640 */
+            aspect-ratio: 1/1;
             background-color: #000;
+            margin-top: 50px;
         }
+        
         video, canvas {
             position: absolute;
             top: 0;
             left: 0;
             width: 100%;
             height: 100%;
+            object-fit: cover;
         }
+        
         canvas {
             z-index: 10;
+            pointer-events: none;
         }
-        #status {
-            padding: 10px;
-            font-size: 14px;
+        
+        #info-overlay {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(5px);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 12px;
+            color: #aaa;
+            z-index: 100;
             text-align: center;
+            border: 1px solid #333;
+        }
+        
+        @media (max-width: 640px) {
+            #status {
+                font-size: 12px;
+                padding: 10px 15px;
+                min-height: 44px;
+            }
+            
+            #container {
+                margin-top: 44px;
+            }
         }
     </style>
 </head>
 <body>
 
-    <div id="status">Cargando modelo YOLO26s... por favor espera.</div>
+    <div id="status" class="loading">⏳ Inicializando sistema...</div>
     
     <div id="container">
         <video id="webcam" autoplay playsinline muted></video>
         <canvas id="canvas"></canvas>
     </div>
+    
+    <div id="info-overlay">🔍 Apunta a componentes del motor</div>
 
     <script>
-        // --- CONFIGURACIÓN DE TU DATASET ---
-        // REEMPLAZA ESTO CON TUS 26 CLASES EN EL ORDEN EXACTO DE TU DATA.YAML
+        // ============================================
+        // CONFIGURACIÓN DEL MODELO
+        // ============================================
+        
+        // ✅ CORRECCIÓN: Tus 26 clases en orden exacto
         const LABELS = [
-            "ABS Unit", "Air Filter", "Air Filter Cover", "Alternator", "ATF Oil Reservoir", 
-            "Battery", "Brake Fluid", "Cabin Air Filter Housing", "Clutch Fluid Reservoir", "Cold Air Intake",
-            "Electric Motor", "Engine Coolant Reservoir", "Engine Cover", "Engine Oil Dip Stick", "Engine Oil Fill Cap",
-            "Fuse Box", "Intercooler Coolant Reservoir", "Inverter Coolant Reservoir", "Oil Filter", "Oil Filter Housing",
-            "Power Steering Reservoir", "Radiator", "Radiator Cap", "Secondary Coolant Reservoir", "Transmission Oil Dip Stick", "Windshield Wiper Fluid"
+            "ABS Unit", "Air Filter", "Air Filter Cover", "Alternator", "ATF Oil Reservoir",
+            "Battery", "Brake Fluid", "Cabin Air Filter Housing", "Clutch Fluid Reservoir", 
+            "Cold Air Intake", "Electric Motor", "Engine Coolant Reservoir", "Engine Cover", 
+            "Engine Oil Dip Stick", "Engine Oil Fill Cap", "Fuse Box", 
+            "Intercooler Coolant Reservoir", "Inverter Coolant Reservoir", "Oil Filter", 
+            "Oil Filter Housing", "Power Steering Reservoir", "Radiator", "Radiator Cap", 
+            "Secondary Coolant Reservoir", "Transmission Oil Dip Stick", "Windshield Wiper Fluid"
         ];
         
-        const MODEL_PATH = "./best.onnx"; 
-        const CONFIDENCE_THRESHOLD = 0.40; // Muestra objetos con más de 40% de certeza
+        // ⚠️ IMPORTANTE: Cambia esta URL por la de tu modelo en GitHub
+        // Debe ser la URL RAW de tu archivo .onnx
+        const MODEL_PATH = "https://github.com/AlejandroP27/prueba/raw/refs/heads/main/best.onnx";
 
-        let session;
+        const CONFIDENCE_THRESHOLD = 0.45;
+        const INPUT_SIZE = 640;
+        
+        // ============================================
+        // ELEMENTOS DOM
+        // ============================================
+        
         const video = document.getElementById('webcam');
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
         const statusDiv = document.getElementById('status');
-
-        // 1. Iniciar la cámara trasera del celular
+        
+        let session = null;
+        let isDetecting = false;
+        let frameCount = 0;
+        const FRAME_SKIP = 2; // Procesar cada 3 frames para mejor rendimiento
+        
+        // ============================================
+        // FUNCIONES PRINCIPALES
+        // ============================================
+        
+        function updateStatus(message, type = 'loading') {
+            statusDiv.textContent = message;
+            statusDiv.className = type;
+            console.log(`[${type.toUpperCase()}] ${message}`);
+        }
+        
+        // Inicializar cámara
         async function setupCamera() {
+            updateStatus('📸 Solicitando acceso a la cámara...', 'loading');
+            
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { 
-                        facingMode: "environment", // Fuerza la cámara trasera del móvil
+                // Intentar primero cámara trasera, si falla usar la frontal
+                let constraints = {
+                    video: {
+                        facingMode: "environment",
                         width: { ideal: 640 },
                         height: { ideal: 640 }
                     },
                     audio: false
-                });
+                };
+                
+                let stream;
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia(constraints);
+                } catch (e) {
+                    // Fallback a cámara frontal o cualquier cámara disponible
+                    constraints.video.facingMode = "user";
+                    stream = await navigator.mediaDevices.getUserMedia(constraints);
+                }
+                
                 video.srcObject = stream;
+                
                 return new Promise((resolve) => {
                     video.onloadedmetadata = () => {
-                        // Ajustamos el tamaño interno del lienzo gráfico al del video
-                        canvas.width = video.videoWidth;
-                        canvas.height = video.videoHeight;
+                        canvas.width = video.videoWidth || 640;
+                        canvas.height = video.videoHeight || 640;
+                        updateStatus('📷 Cámara lista', 'loading');
                         resolve();
                     };
+                    
+                    // Timeout por si tarda mucho
+                    setTimeout(() => {
+                        if (video.videoWidth > 0) {
+                            canvas.width = video.videoWidth;
+                            canvas.height = video.videoHeight;
+                            resolve();
+                        }
+                    }, 3000);
                 });
             } catch (error) {
-                statusDiv.innerText = "Error al acceder a la cámara trasera: " + error.message;
+                updateStatus('❌ Error al activar cámara: ' + error.message, 'error');
+                throw error;
             }
         }
-
-        // 2. Cargar el modelo ONNX usando WebGL (Aceleración por Tarjeta Gráfica)
+        
+        // Cargar modelo ONNX
         async function loadModel() {
-            try {
-                // Configuramos ONNX para usar la GPU del celular (webgl)
-                session = await ort.InferenceSession.create(MODEL_PATH, { executionProviders: ['webgl'] });
-                statusDiv.innerText = "¡YOLO26s cargado con éxito! Apunta al motor.";
-                startDetection();
-            } catch (error) {
-                statusDiv.innerText = "Error al cargar el modelo: " + error.message;
-                console.error(error);
-            }
-        }
-
-        // 3. Bucle continuo de detección
-        function startDetection() {
-            async function renderFrame() {
-                if (video.readyState === video.HAVE_ENOUGH_DATA) {
-                    await processVideoFrame();
-                }
-                requestAnimationFrame(renderFrame); // Ejecuta el siguiente frame inmediatamente
-            }
-            requestAnimationFrame(renderFrame);
-        }
-
-        // 4. Preprocesar la imagen y correr la Inteligencia Artificial
-        async function processVideoFrame() {
-            // Creamos un lienzo temporal de 640x640 para procesar la matriz de la imagen
-            const tempCanvas = document.createElement('canvas');
-            tempCanvas.width = 640;
-            tempCanvas.height = 640;
-            const tempCtx = tempCanvas.getContext('2d');
-            tempCtx.drawImage(video, 0, 0, 640, 640);
+            updateStatus('🧠 Descargando modelo YOLO26s (36MB)...', 'loading');
             
-            const imageData = tempCtx.getImageData(0, 0, 640, 640);
-            const { data } = imageData;
-
-            // YOLO requiere que los píxeles estén normalizados entre 0 y 1, separados por canales (R, G, B)
-            const float32Array = new Float32Array(1 * 3 * 640 * 640);
-            let rIndex = 0;
-            let gIndex = 640 * 640;
-            let bIndex = 2 * 640 * 640;
-
-            for (let i = 0; i < data.length; i += 4) {
-                float32Array[rIndex++] = data[i] / 255.0;     // Rojo
-                float32Array[gIndex++] = data[i + 1] / 255.0; // Verde
-                float32Array[bIndex++] = data[i + 2] / 255.0; // Azul
-            }
-
-            // Crear el Tensor de entrada compatible con ONNX Runtime
-            const inputTensor = new ort.Tensor('float32', float32Array, [1, 3, 640, 640]);
-
             try {
-                // Ejecutar la inferencia (predicción) en la GPU
-                const feeds = {};
-                feeds[session.inputNames[0]] = inputTensor;
-                const outputMap = await session.run(feeds);
+                // ✅ CORRECCIÓN: Verificar que ONNX Runtime esté disponible
+                if (typeof ort === 'undefined') {
+                    throw new Error('ONNX Runtime no está disponible. Revisa la conexión a CDN.');
+                }
                 
-                // YOLO26 devuelve los resultados en la primera propiedad de salida
-                const outputTensor = outputMap[session.outputNames[0]];
+                // Configurar optimizaciones
+                ort.env.wasm.numThreads = 1;
+                ort.env.wasm.simd = true;
+                ort.env.wasm.proxy = false;
                 
-                // Dibujar los cuadros de detección en la pantalla del celular
-                drawBoundingBoxes(outputTensor.data, outputTensor.dims);
-            } catch (err) {
-                console.error("Fallo en la predicción:", err);
+                // ✅ CORRECCIÓN: Usar la URL correcta para los wasm files
+                ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/';
+                
+                // Crear sesión con opciones optimizadas
+                const options = {
+                    executionProviders: ['webgl', 'wasm'],
+                    graphOptimizationLevel: 'all',
+                    enableCpuMemArena: true,
+                    enableMemPattern: true
+                };
+                
+                // ✅ CORRECCIÓN: Cargar modelo correctamente
+                session = await ort.InferenceSession.create(MODEL_PATH, options);
+                
+                updateStatus('✅ ¡Modelo cargado! Enfoca componentes.', 'loading');
+                isDetecting = true;
+                startDetection();
+                
+            } catch (error) {
+                updateStatus('❌ Error al cargar modelo: ' + error.message, 'error');
+                console.error('Error detallado:', error);
+                throw error;
             }
         }
-
-        // 5. Dibujar los rectángulos y las etiquetas de texto
-        function drawBoundingBoxes(data, dims) {
-            ctx.clearRect(0, 0, canvas.width, canvas.height); // Limpiar el frame anterior
-
-            // La salida típica de YOLO26 suele venir estructurada en filas de predicciones
-            const numPredictions = dims[1]; 
-            const elementsPerPrediction = dims[2]; 
-
-            // Escala para ajustar las coordenadas 640x640 al tamaño real de tu pantalla
-            const scaleX = canvas.width / 640;
-            const scaleY = canvas.height / 640;
-
-            // YOLO26 nativo entrega los recuadros limpios directo en una sola matriz
-            for (let i = 0; i < numPredictions; i++) {
-                const offset = i * elementsPerPrediction;
+        
+        // Iniciar detección
+        function startDetection() {
+            if (!isDetecting) return;
+            
+            async function detectLoop() {
+                if (!isDetecting) return;
                 
-                // Estructura de salida estándar de YOLO (x_center, y_center, width, height, clases...)
-                const cx = data[offset + 0];
+                if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                    frameCount++;
+                    if (frameCount % FRAME_SKIP === 0) {
+                        try {
+                            await processFrame();
+                        } catch (e) {
+                            // Silenciar errores de frames individuales
+                            console.debug('Frame error:', e.message);
+                        }
+                    }
+                }
+                
+                requestAnimationFrame(detectLoop);
+            }
+            
+            detectLoop();
+        }
+        
+        // Procesar frame
+        async function processFrame() {
+            if (!session) return;
+            
+            // Crear canvas temporal para preprocesamiento
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = INPUT_SIZE;
+            tempCanvas.height = INPUT_SIZE;
+            const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
+            
+            // Dibujar y escalar
+            tempCtx.drawImage(video, 0, 0, INPUT_SIZE, INPUT_SIZE);
+            const imageData = tempCtx.getImageData(0, 0, INPUT_SIZE, INPUT_SIZE);
+            const { data } = imageData;
+            
+            // Convertir a float32 CHW (Channel, Height, Width)
+            const float32Array = new Float32Array(1 * 3 * INPUT_SIZE * INPUT_SIZE);
+            const size = INPUT_SIZE * INPUT_SIZE;
+            
+            let rIdx = 0;
+            let gIdx = size;
+            let bIdx = 2 * size;
+            
+            // Normalizar: [0,1] y luego [0,1] es suficiente para YOLO
+            for (let i = 0; i < data.length; i += 4) {
+                float32Array[rIdx++] = data[i] / 255.0;
+                float32Array[gIdx++] = data[i + 1] / 255.0;
+                float32Array[bIdx++] = data[i + 2] / 255.0;
+            }
+            
+            // Crear tensor
+            const inputTensor = new ort.Tensor('float32', float32Array, [1, 3, INPUT_SIZE, INPUT_SIZE]);
+            
+            try {
+                // Ejecutar inferencia
+                const feeds = { [session.inputNames[0]]: inputTensor };
+                const results = await session.run(feeds);
+                const output = results[session.outputNames[0]];
+                
+                // Dibujar resultados
+                drawPredictions(output.data, output.dims);
+                
+            } catch (error) {
+                console.warn('Error en inferencia:', error);
+            }
+        }
+        
+        // Dibujar bounding boxes
+        function drawPredictions(data, dims) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            const numPredictions = dims[1];
+            const predLength = dims[2];
+            const scaleX = canvas.width / INPUT_SIZE;
+            const scaleY = canvas.height / INPUT_SIZE;
+            
+            let detections = [];
+            
+            for (let i = 0; i < numPredictions; i++) {
+                const offset = i * predLength;
+                
+                // YOLO format: [cx, cy, w, h, ...class_probs]
+                const cx = data[offset];
                 const cy = data[offset + 1];
                 const w = data[offset + 2];
                 const h = data[offset + 3];
                 
-                // Buscamos cuál de las 26 clases tiene la mayor puntuación de certeza
-                let maxConfidence = 0;
+                // Encontrar mejor clase
+                let maxConf = 0;
                 let classId = -1;
-                for (let c = 4; c < elementsPerPrediction; c++) {
-                    if (data[offset + c] > maxConfidence) {
-                        maxConfidence = data[offset + c];
+                
+                for (let c = 4; c < predLength; c++) {
+                    const conf = data[offset + c];
+                    if (conf > maxConf) {
+                        maxConf = conf;
                         classId = c - 4;
                     }
                 }
-
-                // Si supera nuestro umbral de confianza, lo dibujamos en pantalla
-                if (maxConfidence > CONFIDENCE_THRESHOLD && classId >= 0 && classId < LABELS.length) {
+                
+                // Filtrar por confianza
+                if (maxConf > CONFIDENCE_THRESHOLD && classId >= 0 && classId < LABELS.length) {
                     const x = (cx - w / 2) * scaleX;
                     const y = (cy - h / 2) * scaleY;
                     const width = w * scaleX;
                     const height = h * scaleY;
-
-                    // Dibujar el cuadro con un borde verde brillante
-                    ctx.strokeStyle = "#00FF00";
-                    ctx.lineWidth = 3;
-                    ctx.strokeRect(x, y, width, height);
-
-                    // Dibujar fondo del texto de la etiqueta
-                    ctx.fillStyle = "#00FF00";
-                    const text = `${LABELS[classId]} (${Math.round(maxConfidence * 100)}%)`;
-                    ctx.font = "bold 16px Arial";
-                    const textWidth = ctx.measureText(text).width;
-                    ctx.fillRect(x, y - 25, textWidth + 10, 25);
-
-                    // Escribir el nombre de la pieza mecánica en negro
-                    ctx.fillStyle = "#000000";
-                    ctx.fillText(text, x + 5, y - 7);
+                    
+                    // Guardar para dibujar ordenado
+                    detections.push({
+                        x, y, width, height,
+                        label: LABELS[classId],
+                        confidence: maxConf,
+                        classId
+                    });
                 }
             }
-        }
-
-        // Iniciar la aplicación al cargar la página
-        async function main() {
-            await setupCamera();
-            await loadModel();
+            
+            // Ordenar por confianza (mayor primero)
+            detections.sort((a, b) => b.confidence - a.confidence);
+            
+            // Dibujar
+            for (const det of detections) {
+                const { x, y, width, height, label, confidence } = det;
+                
+                // Color según clase
+                const hue = (det.classId * 360 / LABELS.length) % 360;
+                
+                // Rectángulo
+                ctx.strokeStyle = `hsl(${hue}, 80%, 60%)`;
+                ctx.lineWidth = 3;
+                ctx.shadowColor = `hsla(${hue}, 80%, 60%, 0.3)`;
+                ctx.shadowBlur = 10;
+                ctx.strokeRect(x, y, width, height);
+                ctx.shadowBlur = 0;
+                
+                // Fondo del texto
+                const text = `${label} (${Math.round(confidence * 100)}%)`;
+                ctx.font = "bold 14px 'Segoe UI', Arial, sans-serif";
+                const metrics = ctx.measureText(text);
+                const textWidth = metrics.width;
+                const padding = 6;
+                const rectHeight = 26;
+                
+                ctx.fillStyle = `hsla(${hue}, 80%, 50%, 0.9)`;
+                ctx.shadowBlur = 5;
+                ctx.shadowColor = 'rgba(0,0,0,0.5)';
+                ctx.fillRect(x - 2, y - rectHeight - 2, textWidth + padding * 2 + 4, rectHeight + 4);
+                ctx.shadowBlur = 0;
+                
+                // Texto
+                ctx.fillStyle = '#ffffff';
+                ctx.shadowColor = 'rgba(0,0,0,0.8)';
+                ctx.shadowBlur = 4;
+                ctx.fillText(text, x + padding, y - 8);
+                ctx.shadowBlur = 0;
+            }
         }
         
-        //window.onload = main;
-        // Esperamos a que la página y todas las librerías externas estén 100% cargadas
-window.addEventListener('load', () => {
-    // Le damos un margen de 500ms al celular para registrar la librería 'ort'
-    setTimeout(() => {
-        if (typeof ort !== 'undefined') {
-            main();
-        } else {
-            document.getElementById('status').innerText = "Error: La librería ONNX no se cargó correctamente. Intenta refrescar la página.";
-        }
-    }, 500);
-});
-
+        // ============================================
+        // INICIALIZACIÓN
+        // ============================================
+        
+        window.addEventListener('load', async () => {
+            try {
+                // 1. Verificar ONNX Runtime
+                if (typeof ort === 'undefined') {
+                    throw new Error('ONNX Runtime no se cargó correctamente.');
+                }
+                
+                // 2. Iniciar cámara
+                await setupCamera();
+                
+                // 3. Cargar modelo (con retry)
+                let retries = 3;
+                let loaded = false;
+                
+                while (retries > 0 && !loaded) {
+                    try {
+                        await loadModel();
+                        loaded = true;
+                    } catch (e) {
+                        retries--;
+                        if (retries > 0) {
+                            updateStatus(`⚠️ Reintentando carga del modelo (${retries} intentos restantes)...`, 'loading');
+                            await new Promise(r => setTimeout(r, 2000));
+                        } else {
+                            throw e;
+                        }
+                    }
+                }
+                
+            } catch (error) {
+                updateStatus(`❌ Error fatal: ${error.message}`, 'error');
+                console.error('Error en inicialización:', error);
+            }
+        });
+        
+        // Limpiar recursos al cerrar
+        window.addEventListener('beforeunload', () => {
+            isDetecting = false;
+            if (video.srcObject) {
+                video.srcObject.getTracks().forEach(track => track.stop());
+            }
+        });
+        
+        console.log('🚗 Detector de Mecánica YOLO26s inicializado');
+        console.log(`📊 Clases: ${LABELS.length}`);
+        console.log(`🎯 Umbral de confianza: ${CONFIDENCE_THRESHOLD}`);
     </script>
 </body>
 </html>
