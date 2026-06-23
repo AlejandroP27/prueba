@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!-- <!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
@@ -482,6 +482,1072 @@
                 console.log(`📊 Clases: ${LABELS.length}`);
                 console.log(`📁 Modelo: ${MODEL_PATH}`);
                 console.log(`🔧 ONNX Runtime:`, ort.version || 'desconocida');
+                
+                await setupCamera();
+                await loadModel();
+                
+            } catch (error) {
+                console.error('❌ Error fatal:', error);
+                updateStatus(`❌ Error: ${error.message}`, 'error');
+            }
+        });
+        
+        window.addEventListener('beforeunload', () => {
+            isDetecting = false;
+            if (video.srcObject) {
+                video.srcObject.getTracks().forEach(track => track.stop());
+            }
+        });
+    </script>
+</body>
+</html> -->
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Detector de Mecánica YOLO26s</title>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background-color: #0a0a0a;
+            color: white;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            min-height: 100vh;
+            overflow-y: auto;
+            padding-bottom: 20px;
+        }
+        
+        #status {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 100;
+            padding: 12px 20px;
+            font-size: 14px;
+            text-align: center;
+            background: rgba(0, 0, 0, 0.9);
+            backdrop-filter: blur(10px);
+            border-bottom: 2px solid #333;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            color: #00ff88;
+            min-height: 50px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            word-wrap: break-word;
+        }
+        
+        #status.error {
+            color: #ff4444;
+        }
+        
+        #status.loading {
+            color: #ffaa00;
+        }
+        
+        #container {
+            position: relative;
+            width: 100%;
+            max-width: 640px;
+            aspect-ratio: 1/1;
+            background-color: #000;
+            margin-top: 50px;
+        }
+        
+        video, canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        
+        canvas {
+            z-index: 10;
+            pointer-events: none;
+        }
+        
+        /* ============================================
+           PANEL DE FILTROS - VERSIÓN OPTIMIZADA
+           ============================================ */
+        #filter-panel {
+            width: 100%;
+            max-width: 640px;
+            background: rgba(20, 20, 20, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 12px;
+            padding: 16px;
+            margin-top: 10px;
+            border: 1px solid #333;
+        }
+        
+        .filter-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        
+        .filter-header h3 {
+            font-size: 14px;
+            color: #00ff88;
+            font-weight: 600;
+        }
+        
+        .filter-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .filter-actions button {
+            background: #333;
+            color: white;
+            border: none;
+            padding: 5px 12px;
+            border-radius: 4px;
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-weight: 600;
+        }
+        
+        .filter-actions button:hover {
+            background: #444;
+        }
+        
+        .filter-actions button.select-all {
+            background: #00ff88;
+            color: #000;
+        }
+        
+        .filter-actions button.select-all:hover {
+            background: #00cc6a;
+        }
+        
+        .filter-actions button.clear-all {
+            background: #ff4444;
+            color: white;
+        }
+        
+        .filter-actions button.clear-all:hover {
+            background: #cc3333;
+        }
+        
+        /* ============================================
+           INPUT DE BÚSQUEDA MEJORADO
+           ============================================ */
+        .filter-input-group {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 10px;
+            align-items: stretch;
+        }
+        
+        .filter-input-group input {
+            flex: 1;
+            padding: 10px 14px;
+            border-radius: 8px;
+            border: 2px solid #333;
+            background: #1a1a1a;
+            color: white;
+            font-size: 14px;
+            transition: all 0.3s;
+            outline: none;
+            min-width: 0;
+        }
+        
+        .filter-input-group input:focus {
+            border-color: #00ff88;
+            box-shadow: 0 0 20px rgba(0, 255, 136, 0.1);
+        }
+        
+        .filter-input-group input::placeholder {
+            color: #555;
+            font-size: 13px;
+        }
+        
+        .filter-input-group button {
+            padding: 10px 20px;
+            border-radius: 8px;
+            border: none;
+            background: #00ff88;
+            color: #000;
+            font-weight: 700;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.3s;
+            white-space: nowrap;
+        }
+        
+        .filter-input-group button:hover {
+            background: #00cc6a;
+            transform: scale(1.02);
+        }
+        
+        .filter-input-group button:active {
+            transform: scale(0.98);
+        }
+        
+        /* ============================================
+           ETIQUETAS DE CLASES ACTIVAS
+           ============================================ */
+        .active-classes {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 8px;
+            min-height: 28px;
+            padding: 4px;
+            border-radius: 6px;
+            background: rgba(0, 0, 0, 0.3);
+        }
+        
+        .active-class-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: rgba(0, 255, 136, 0.15);
+            border: 1px solid rgba(0, 255, 136, 0.3);
+            border-radius: 4px;
+            padding: 2px 8px;
+            font-size: 11px;
+            color: #00ff88;
+            animation: fadeIn 0.2s ease;
+        }
+        
+        .active-class-tag .remove-tag {
+            cursor: pointer;
+            color: #ff4444;
+            font-weight: bold;
+            font-size: 14px;
+            line-height: 1;
+            margin-left: 2px;
+            transition: all 0.2s;
+        }
+        
+        .active-class-tag .remove-tag:hover {
+            color: #ff6666;
+            transform: scale(1.2);
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: scale(0.9); }
+            to { opacity: 1; transform: scale(1); }
+        }
+        
+        .filter-stats {
+            font-size: 11px;
+            color: #888;
+            text-align: center;
+            padding-top: 8px;
+            border-top: 1px solid #222;
+        }
+        
+        .filter-stats strong {
+            color: #00ff88;
+        }
+        
+        /* ============================================
+           SUGERENCIAS AUTOMÁTICAS
+           ============================================ */
+        .suggestions {
+            display: none;
+            position: absolute;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 6px;
+            max-height: 150px;
+            overflow-y: auto;
+            width: calc(100% - 8px);
+            z-index: 200;
+            margin-top: 4px;
+        }
+        
+        .suggestions.active {
+            display: block;
+        }
+        
+        .suggestions .suggestion-item {
+            padding: 8px 14px;
+            cursor: pointer;
+            font-size: 13px;
+            color: #ccc;
+            transition: all 0.15s;
+            border-bottom: 1px solid #222;
+        }
+        
+        .suggestions .suggestion-item:hover {
+            background: #2a2a2a;
+            color: #00ff88;
+        }
+        
+        .suggestions .suggestion-item .suggestion-match {
+            color: #00ff88;
+            font-weight: bold;
+        }
+        
+        .suggestions .suggestion-item:last-child {
+            border-bottom: none;
+        }
+        
+        .filter-input-wrapper {
+            position: relative;
+            flex: 1;
+        }
+        
+        #info-overlay {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(5px);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 12px;
+            color: #aaa;
+            z-index: 100;
+            text-align: center;
+            border: 1px solid #333;
+        }
+        
+        @media (max-width: 640px) {
+            #status {
+                font-size: 12px;
+                padding: 10px 15px;
+                min-height: 44px;
+            }
+            
+            #container {
+                margin-top: 44px;
+            }
+            
+            #filter-panel {
+                padding: 12px;
+                margin-top: 8px;
+            }
+            
+            .filter-input-group {
+                flex-direction: column;
+            }
+            
+            .filter-input-group button {
+                padding: 8px;
+                font-size: 13px;
+            }
+            
+            .filter-input-group input {
+                font-size: 13px;
+                padding: 8px 12px;
+            }
+            
+            .active-class-tag {
+                font-size: 10px;
+                padding: 1px 6px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="status" class="loading">⏳ Inicializando sistema...</div>
+    
+    <div id="container">
+        <video id="webcam" autoplay playsinline muted></video>
+        <canvas id="canvas"></canvas>
+    </div>
+    
+    <!-- ============================================
+         PANEL DE FILTROS OPTIMIZADO
+         ============================================ -->
+    <div id="filter-panel">
+        <div class="filter-header">
+            <h3>🎯 Filtrar clases</h3>
+            <div class="filter-actions">
+                <button class="select-all" onclick="selectAllClasses()">📋 Todas</button>
+                <button class="clear-all" onclick="clearAllClasses()">🗑️ Limpiar</button>
+            </div>
+        </div>
+        
+        <!-- Input de búsqueda con sugerencias -->
+        <div class="filter-input-group">
+            <div class="filter-input-wrapper">
+                <input 
+                    type="text" 
+                    id="class-input" 
+                    placeholder="Ej: Air Filter, Battery, Radiator Cap"
+                    autocomplete="off"
+                >
+                <div class="suggestions" id="suggestions"></div>
+            </div>
+            <button onclick="addClasses()">➕ Agregar</button>
+        </div>
+        
+        <!-- Etiquetas de clases activas -->
+        <div class="active-classes" id="active-classes">
+            <span style="color: #555; font-size: 12px; padding: 4px 8px;">
+                💡 Escribe una clase y presiona Enter o "Agregar"
+            </span>
+        </div>
+        
+        <div class="filter-stats">
+            <strong id="selected-count">0</strong> clases seleccionadas · 
+            <span id="total-classes">26</span> disponibles
+        </div>
+    </div>
+    
+    <div id="info-overlay">🔍 Apunta a componentes del motor</div>
+
+    <script>
+        // ============================================
+        // CONFIGURACIÓN
+        // ============================================
+        
+        const LABELS = [
+            "ABS Unit", "Air Filter", "Air Filter Cover", "Alternator", "ATF Oil Reservoir",
+            "Battery", "Brake Fluid", "Cabin Air Filter Housing", "Clutch Fluid Reservoir", 
+            "Cold Air Intake", "Electric Motor", "Engine Coolant Reservoir", "Engine Cover", 
+            "Engine Oil Dip Stick", "Engine Oil Fill Cap", "Fuse Box", 
+            "Intercooler Coolant Reservoir", "Inverter Coolant Reservoir", "Oil Filter", 
+            "Oil Filter Housing", "Power Steering Reservoir", "Radiator", "Radiator Cap", 
+            "Secondary Coolant Reservoir", "Transmission Oil Dip Stick", "Windshield Wiper Fluid"
+        ];
+        
+        const MODEL_PATH = "https://raw.githubusercontent.com/AlejandroP27/prueba/refs/heads/main/best.onnx";
+        const CONFIDENCE_THRESHOLD = 0.45;
+        const INPUT_SIZE = 640;
+        
+        // ============================================
+        // ESTADO DEL FILTRO
+        // ============================================
+        
+        let selectedClasses = new Set();
+        let selectedClassNames = new Set();
+        
+        // ============================================
+        // ELEMENTOS DOM
+        // ============================================
+        
+        const video = document.getElementById('webcam');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const statusDiv = document.getElementById('status');
+        const classInput = document.getElementById('class-input');
+        const suggestionsDiv = document.getElementById('suggestions');
+        const activeClassesDiv = document.getElementById('active-classes');
+        const selectedCountSpan = document.getElementById('selected-count');
+        const totalClassesSpan = document.getElementById('total-classes');
+        
+        let session = null;
+        let isDetecting = false;
+        let frameCount = 0;
+        const FRAME_SKIP = 2;
+        let inputName = null;
+        let outputName = null;
+        
+        // Mostrar total de clases
+        totalClassesSpan.textContent = LABELS.length;
+        
+        function updateStatus(message, type = 'loading') {
+            statusDiv.textContent = message;
+            statusDiv.className = type;
+            console.log(`[${type.toUpperCase()}] ${message}`);
+        }
+        
+        // ============================================
+        // FUNCIONES DEL FILTRO - VERSIÓN OPTIMIZADA
+        // ============================================
+        
+        function normalizeString(str) {
+            return str.toLowerCase().trim().replace(/\s+/g, ' ');
+        }
+        
+        function findClass(query) {
+            const normalizedQuery = normalizeString(query);
+            
+            // Búsqueda exacta (case insensitive)
+            for (let i = 0; i < LABELS.length; i++) {
+                if (normalizeString(LABELS[i]) === normalizedQuery) {
+                    return i;
+                }
+            }
+            
+            // Búsqueda parcial (contiene)
+            for (let i = 0; i < LABELS.length; i++) {
+                if (normalizeString(LABELS[i]).includes(normalizedQuery)) {
+                    return i;
+                }
+            }
+            
+            return -1;
+        }
+        
+        function findClassesByText(text) {
+            const parts = text.split(',').map(s => s.trim()).filter(s => s.length > 0);
+            const found = [];
+            const notFound = [];
+            
+            for (const part of parts) {
+                const classId = findClass(part);
+                if (classId !== -1) {
+                    found.push(classId);
+                } else {
+                    notFound.push(part);
+                }
+            }
+            
+            return { found, notFound };
+        }
+        
+        function addClasses() {
+            const text = classInput.value.trim();
+            if (!text) {
+                classInput.focus();
+                return;
+            }
+            
+            const { found, notFound } = findClassesByText(text);
+            
+            if (found.length === 0) {
+                // Mostrar error temporal
+                classInput.style.borderColor = '#ff4444';
+                setTimeout(() => {
+                    classInput.style.borderColor = '#333';
+                }, 1500);
+                
+                if (notFound.length > 0) {
+                    updateStatus(`❌ Clase no encontrada: "${notFound.join(', ')}"`, 'error');
+                }
+                return;
+            }
+            
+            // Agregar clases encontradas
+            let added = 0;
+            for (const classId of found) {
+                if (!selectedClasses.has(classId)) {
+                    selectedClasses.add(classId);
+                    selectedClassNames.add(LABELS[classId]);
+                    added++;
+                }
+            }
+            
+            // Limpiar input
+            classInput.value = '';
+            suggestionsDiv.classList.remove('active');
+            
+            // Actualizar UI
+            updateActiveTags();
+            updateStats();
+            
+            if (added > 0) {
+                const names = found.map(id => LABELS[id]).join(', ');
+                updateStatus(`✅ Agregadas: ${names}`, 'loading');
+            }
+            
+            if (notFound.length > 0) {
+                updateStatus(`⚠️ No encontradas: "${notFound.join(', ')}"`, 'error');
+                setTimeout(() => {
+                    updateStatus(`✅ ${selectedClasses.size} clases activas`, 'loading');
+                }, 2000);
+            }
+        }
+        
+        function removeClass(classId) {
+            selectedClasses.delete(classId);
+            selectedClassNames.delete(LABELS[classId]);
+            updateActiveTags();
+            updateStats();
+            
+            if (selectedClasses.size === 0) {
+                updateStatus('⚠️ Ninguna clase seleccionada', 'loading');
+            } else {
+                updateStatus(`✅ ${selectedClasses.size} clases activas`, 'loading');
+            }
+        }
+        
+        function selectAllClasses() {
+            selectedClasses = new Set(LABELS.map((_, i) => i));
+            selectedClassNames = new Set(LABELS);
+            updateActiveTags();
+            updateStats();
+            updateStatus(`✅ Todas las clases (${selectedClasses.size}) activas`, 'loading');
+        }
+        
+        function clearAllClasses() {
+            selectedClasses = new Set();
+            selectedClassNames = new Set();
+            updateActiveTags();
+            updateStats();
+            updateStatus('🗑️ Todas las clases desactivadas', 'loading');
+        }
+        
+        function updateActiveTags() {
+            if (selectedClasses.size === 0) {
+                activeClassesDiv.innerHTML = `
+                    <span style="color: #555; font-size: 12px; padding: 4px 8px;">
+                        💡 Escribe una clase y presiona Enter o "Agregar"
+                    </span>
+                `;
+                return;
+            }
+            
+            let html = '';
+            // Mostrar en orden alfabético
+            const sorted = Array.from(selectedClasses).sort((a, b) => LABELS[a].localeCompare(LABELS[b]));
+            
+            for (const classId of sorted) {
+                html += `
+                    <span class="active-class-tag">
+                        ${LABELS[classId]}
+                        <span class="remove-tag" onclick="removeClass(${classId})">×</span>
+                    </span>
+                `;
+            }
+            
+            activeClassesDiv.innerHTML = html;
+        }
+        
+        function updateStats() {
+            selectedCountSpan.textContent = selectedClasses.size;
+        }
+        
+        // ============================================
+        // SUGERENCIAS AUTOMÁTICAS
+        // ============================================
+        
+        function updateSuggestions(query) {
+            const normalizedQuery = normalizeString(query);
+            
+            if (!normalizedQuery || normalizedQuery.length < 1) {
+                suggestionsDiv.classList.remove('active');
+                return;
+            }
+            
+            const matches = [];
+            for (let i = 0; i < LABELS.length; i++) {
+                const label = LABELS[i];
+                const normalizedLabel = normalizeString(label);
+                
+                // Si ya está seleccionada, no mostrarla
+                if (selectedClasses.has(i)) continue;
+                
+                if (normalizedLabel.includes(normalizedQuery) || 
+                    normalizedLabel.startsWith(normalizedQuery)) {
+                    matches.push({ id: i, label: label, normalized: normalizedLabel });
+                }
+            }
+            
+            // Limitar a 10 sugerencias
+            const topMatches = matches.slice(0, 10);
+            
+            if (topMatches.length === 0) {
+                suggestionsDiv.classList.remove('active');
+                return;
+            }
+            
+            let html = '';
+            for (const match of topMatches) {
+                // Resaltar la parte que coincide
+                const index = match.normalized.indexOf(normalizedQuery);
+                let displayLabel = match.label;
+                if (index !== -1) {
+                    const before = match.label.substring(0, index);
+                    const after = match.label.substring(index + normalizedQuery.length);
+                    displayLabel = `${before}<span class="suggestion-match">${match.label.substring(index, index + normalizedQuery.length)}</span>${after}`;
+                }
+                
+                html += `
+                    <div class="suggestion-item" onclick="selectSuggestion(${match.id})">
+                        ${displayLabel}
+                    </div>
+                `;
+            }
+            
+            suggestionsDiv.innerHTML = html;
+            suggestionsDiv.classList.add('active');
+        }
+        
+        function selectSuggestion(classId) {
+            if (!selectedClasses.has(classId)) {
+                selectedClasses.add(classId);
+                selectedClassNames.add(LABELS[classId]);
+                updateActiveTags();
+                updateStats();
+                updateStatus(`✅ Agregada: ${LABELS[classId]}`, 'loading');
+            }
+            
+            classInput.value = '';
+            suggestionsDiv.classList.remove('active');
+            classInput.focus();
+        }
+        
+        // ============================================
+        // EVENTOS DEL INPUT
+        // ============================================
+        
+        classInput.addEventListener('input', (e) => {
+            updateSuggestions(e.target.value);
+        });
+        
+        classInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                
+                // Si hay sugerencias y solo una, seleccionarla
+                const visibleSuggestions = suggestionsDiv.querySelectorAll('.suggestion-item');
+                if (visibleSuggestions.length === 1) {
+                    visibleSuggestions[0].click();
+                    return;
+                }
+                
+                addClasses();
+            }
+            
+            if (e.key === 'Escape') {
+                suggestionsDiv.classList.remove('active');
+                classInput.blur();
+            }
+        });
+        
+        classInput.addEventListener('blur', () => {
+            setTimeout(() => {
+                suggestionsDiv.classList.remove('active');
+            }, 200);
+        });
+        
+        classInput.addEventListener('focus', () => {
+            if (classInput.value.length > 0) {
+                updateSuggestions(classInput.value);
+            }
+        });
+        
+        // ============================================
+        // CÁMARA
+        // ============================================
+        
+        async function setupCamera() {
+            updateStatus('📸 Solicitando acceso a la cámara...', 'loading');
+            
+            try {
+                let stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: "environment",
+                        width: { ideal: 640 },
+                        height: { ideal: 640 }
+                    },
+                    audio: false
+                });
+                
+                video.srcObject = stream;
+                
+                return new Promise((resolve) => {
+                    video.onloadedmetadata = () => {
+                        canvas.width = video.videoWidth || 640;
+                        canvas.height = video.videoHeight || 640;
+                        updateStatus('📷 Cámara lista', 'loading');
+                        resolve();
+                    };
+                    
+                    setTimeout(() => {
+                        if (video.videoWidth > 0) {
+                            canvas.width = video.videoWidth;
+                            canvas.height = video.videoHeight;
+                            resolve();
+                        }
+                    }, 3000);
+                });
+            } catch (error) {
+                updateStatus('❌ Error cámara: ' + error.message, 'error');
+                throw error;
+            }
+        }
+        
+        // ============================================
+        // CARGA DEL MODELO
+        // ============================================
+        
+        async function loadModel() {
+            updateStatus('🧠 Descargando modelo YOLO26s (36MB)...', 'loading');
+            
+            try {
+                if (typeof ort === 'undefined') {
+                    throw new Error('ONNX Runtime no está disponible');
+                }
+                
+                ort.env.wasm.numThreads = 1;
+                ort.env.wasm.simd = true;
+                ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/';
+                
+                const options = {
+                    executionProviders: ['wasm', 'webgl'],
+                    graphOptimizationLevel: 'all',
+                    enableCpuMemArena: true,
+                    enableMemPattern: true
+                };
+                
+                session = await ort.InferenceSession.create(MODEL_PATH, options);
+                
+                inputName = session.inputNames[0];
+                outputName = session.outputNames[0];
+                
+                console.log('🔍 Modelo cargado:');
+                console.log('  Input:', inputName);
+                console.log('  Output:', outputName);
+                
+                updateStatus(`✅ Modelo cargado - ${selectedClasses.size} clases activas`, 'loading');
+                isDetecting = true;
+                startDetection();
+                
+            } catch (error) {
+                updateStatus('❌ Error al cargar modelo: ' + error.message, 'error');
+                console.error('Error detallado:', error);
+                throw error;
+            }
+        }
+        
+        // ============================================
+        // DETECCIÓN
+        // ============================================
+        
+        function startDetection() {
+            if (!isDetecting) return;
+            
+            async function detectLoop() {
+                if (!isDetecting) return;
+                
+                if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                    frameCount++;
+                    if (frameCount % FRAME_SKIP === 0) {
+                        try {
+                            await processFrame();
+                        } catch (e) {
+                            // Silenciar errores de frames
+                        }
+                    }
+                }
+                
+                requestAnimationFrame(detectLoop);
+            }
+            
+            detectLoop();
+        }
+        
+        async function processFrame() {
+            if (!session || !inputName || !outputName) {
+                return;
+            }
+            
+            try {
+                const tempCanvas = document.createElement('canvas');
+                tempCanvas.width = INPUT_SIZE;
+                tempCanvas.height = INPUT_SIZE;
+                const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
+                
+                tempCtx.drawImage(video, 0, 0, INPUT_SIZE, INPUT_SIZE);
+                const imageData = tempCtx.getImageData(0, 0, INPUT_SIZE, INPUT_SIZE);
+                const { data } = imageData;
+                
+                const float32Array = new Float32Array(1 * 3 * INPUT_SIZE * INPUT_SIZE);
+                const size = INPUT_SIZE * INPUT_SIZE;
+                
+                let rIdx = 0;
+                let gIdx = size;
+                let bIdx = 2 * size;
+                
+                for (let i = 0; i < data.length; i += 4) {
+                    float32Array[rIdx++] = data[i] / 255.0;
+                    float32Array[gIdx++] = data[i + 1] / 255.0;
+                    float32Array[bIdx++] = data[i + 2] / 255.0;
+                }
+                
+                const inputTensor = new ort.Tensor('float32', float32Array, [1, 3, INPUT_SIZE, INPUT_SIZE]);
+                
+                const feeds = {};
+                feeds[inputName] = inputTensor;
+                
+                const results = await session.run(feeds);
+                const output = results[outputName];
+                
+                if (output) {
+                    drawPredictionsWithFilter(output.data, output.dims);
+                }
+                
+            } catch (error) {
+                console.warn('Error en procesamiento:', error.message);
+            }
+        }
+        
+        // ============================================
+        // DIBUJADO CON FILTRO
+        // ============================================
+        
+        function drawPredictionsWithFilter(data, dims) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            if (!data || !dims || dims.length < 3) {
+                return;
+            }
+            
+            // Si no hay clases seleccionadas, mostrar mensaje
+            if (selectedClasses.size === 0) {
+                ctx.fillStyle = 'rgba(0,0,0,0.5)';
+                ctx.fillRect(10, 10, 220, 28);
+                ctx.fillStyle = '#ffaa00';
+                ctx.font = "12px Arial";
+                ctx.fillText('⚠️ Selecciona al menos una clase', 20, 30);
+                return;
+            }
+            
+            const numPredictions = dims[1] || 0;
+            const predLength = dims[2] || 0;
+            
+            if (numPredictions === 0 || predLength === 0) {
+                return;
+            }
+            
+            const scaleX = canvas.width / INPUT_SIZE;
+            const scaleY = canvas.height / INPUT_SIZE;
+            
+            let detections = [];
+            
+            for (let i = 0; i < numPredictions; i++) {
+                const offset = i * predLength;
+                
+                const x1 = data[offset + 0] || 0;
+                const y1 = data[offset + 1] || 0;
+                const x2 = data[offset + 2] || 0;
+                const y2 = data[offset + 3] || 0;
+                const confidence = data[offset + 4] || 0;
+                const classId = Math.round(data[offset + 5] || 0);
+                
+                // ✅ FILTRO: Solo clases seleccionadas
+                if (!selectedClasses.has(classId)) {
+                    continue;
+                }
+                
+                if (x1 < 0 || x1 > INPUT_SIZE || x2 < 0 || x2 > INPUT_SIZE ||
+                    y1 < 0 || y1 > INPUT_SIZE || y2 < 0 || y2 > INPUT_SIZE) {
+                    continue;
+                }
+                
+                if (x2 <= x1 || y2 <= y1) {
+                    continue;
+                }
+                
+                if (confidence < CONFIDENCE_THRESHOLD) {
+                    continue;
+                }
+                
+                if (classId < 0 || classId >= LABELS.length) {
+                    continue;
+                }
+                
+                const x = x1 * scaleX;
+                const y = y1 * scaleY;
+                const width = (x2 - x1) * scaleX;
+                const height = (y2 - y1) * scaleY;
+                
+                detections.push({
+                    x, y, width, height,
+                    label: LABELS[classId],
+                    confidence: confidence,
+                    classId: classId
+                });
+            }
+            
+            detections.sort((a, b) => b.confidence - a.confidence);
+            
+            if (detections.length > 15) {
+                detections = detections.slice(0, 15);
+            }
+            
+            for (const det of detections) {
+                const { x, y, width, height, label, confidence } = det;
+                const hue = (det.classId * 360 / LABELS.length) % 360;
+                
+                ctx.strokeStyle = `hsl(${hue}, 80%, 60%)`;
+                ctx.lineWidth = 3;
+                ctx.shadowColor = `hsla(${hue}, 80%, 60%, 0.3)`;
+                ctx.shadowBlur = 10;
+                ctx.strokeRect(x, y, width, height);
+                ctx.shadowBlur = 0;
+                
+                const text = `${label} (${Math.round(confidence * 100)}%)`;
+                ctx.font = "bold 14px 'Segoe UI', Arial, sans-serif";
+                const metrics = ctx.measureText(text);
+                const textWidth = metrics.width;
+                const padding = 6;
+                const rectHeight = 26;
+                
+                ctx.fillStyle = `hsla(${hue}, 80%, 50%, 0.9)`;
+                ctx.shadowBlur = 5;
+                ctx.shadowColor = 'rgba(0,0,0,0.5)';
+                ctx.fillRect(x - 2, y - rectHeight - 2, textWidth + padding * 2 + 4, rectHeight + 4);
+                ctx.shadowBlur = 0;
+                
+                ctx.fillStyle = '#ffffff';
+                ctx.shadowColor = 'rgba(0,0,0,0.8)';
+                ctx.shadowBlur = 4;
+                ctx.fillText(text, x + padding, y - 8);
+                ctx.shadowBlur = 0;
+            }
+            
+            // Contador
+            if (detections.length > 0) {
+                ctx.fillStyle = 'rgba(0,0,0,0.7)';
+                ctx.fillRect(10, 10, 180, 28);
+                ctx.fillStyle = '#00ff88';
+                ctx.font = "12px Arial";
+                ctx.fillText(`🔍 ${detections.length} detecciones`, 20, 30);
+            } else {
+                ctx.fillStyle = 'rgba(0,0,0,0.5)';
+                ctx.fillRect(10, 10, 180, 28);
+                ctx.fillStyle = '#888';
+                ctx.font = "12px Arial";
+                ctx.fillText(`🔍 Buscando... (${selectedClasses.size} clases)`, 20, 30);
+            }
+        }
+        
+        // ============================================
+        // INICIALIZACIÓN
+        // ============================================
+        
+        window.addEventListener('load', async () => {
+            try {
+                if (typeof ort === 'undefined') {
+                    throw new Error('ONNX Runtime no se cargó correctamente.');
+                }
+                
+                console.log('🚗 Detector de Mecánica YOLO26s');
+                console.log(`📊 Clases: ${LABELS.length}`);
+                console.log(`📁 Modelo: ${MODEL_PATH}`);
+                console.log('💡 Escribe el nombre de una clase y presiona Enter');
+                
+                // Exponer funciones globales
+                window.addClasses = addClasses;
+                window.removeClass = removeClass;
+                window.selectAllClasses = selectAllClasses;
+                window.clearAllClasses = clearAllClasses;
+                window.selectSuggestion = selectSuggestion;
                 
                 await setupCamera();
                 await loadModel();
